@@ -1,0 +1,117 @@
+---
+# file: tasks/install-haproxy-exporter.yml
+#
+# Install Prometheus haproxy-exporter.
+#
+# @see http://prometheus.io/docs/introduction/getting_started/
+#
+
+- block:
+
+    - name: set internal variables for convenience
+      set_fact:
+        prometheus_haproxy_exporter_subdir: "{{ prometheus_install_path }}/haproxy_exporter-{{ prometheus_haproxy_exporter_version }}.{{ prometheus_platform_suffix }}"
+
+
+    - name: set download url for versions >= 0.13.0
+      set_fact:
+        prometheus_haproxy_exporter_tarball_url: "https://github.com/prometheus/haproxy_exporter/releases/download/v{{ prometheus_haproxy_exporter_version }}/haproxy_exporter-{{ prometheus_haproxy_exporter_version }}.{{ prometheus_platform_suffix }}.tar.gz"
+      when: prometheus_haproxy_exporter_version | version_compare('0.13.0', '>=')
+
+    - name: set download url for versions < 0.13.0 (OBSOLETE!)
+      set_fact:
+        prometheus_haproxy_exporter_tarball_url: "https://github.com/prometheus/haproxy_exporter/releases/download/v{{ prometheus_haproxy_exporter_version }}/haproxy_exporter-{{ prometheus_haproxy_exporter_version }}.{{ prometheus_platform_suffix }}.tar.gz"
+      when: prometheus_haproxy_exporter_version | version_compare('0.13.0', '<')
+
+    - name: set daemon dir for versions >= 0.12
+      set_fact:
+        prometheus_haproxy_exporter_daemon_dir: "{{ prometheus_haproxy_exporter_subdir }}"
+      when: prometheus_haproxy_exporter_version | version_compare('0.12', '>=')
+
+    - name: set daemon dir for versions < 0.12 (OBSOLETE!)
+      set_fact:
+        prometheus_haproxy_exporter_daemon_dir: "{{ prometheus_haproxy_exporter_subdir }}"
+      when: prometheus_haproxy_exporter_version | version_compare('0.12', '<')
+
+    - name: Check haproxy_exporter exist
+      stat: path={{ prometheus_install_path }}/haproxy_exporter-{{ prometheus_haproxy_exporter_version }}.{{ prometheus_platform_suffix }}
+      register: haproxy_exporter_bin
+
+    - name: download and untar haproxy_exporter tarball
+      unarchive:
+        src: "{{ prometheus_haproxy_exporter_tarball_url }}"
+        dest: "{{ prometheus_install_path }}"
+        copy: no
+      when: haproxy_exporter_bin.stat.exists == False
+
+  when: prometheus_haproxy_exporter_version != "git"
+
+
+- block:
+
+    - name: set internal variables for convenience
+      set_fact:
+        prometheus_haproxy_exporter_git_url: "https://github.com/prometheus/haproxy_exporter.git"
+        prometheus_haproxy_exporter_src_path: "{{ prometheus_goroot }}/src/github.com/prometheus/haproxy_exporter"
+        prometheus_haproxy_exporter_daemon_dir: "{{ prometheus_install_path }}"
+
+    - name: delete the haproxy_exporter build directory, if necessary
+      file: path={{ prometheus_haproxy_exporter_src_path }}  state=absent
+      when: prometheus_rebuild
+
+    - name: mkdir for haproxy_exporter source code
+      file: path={{ prometheus_haproxy_exporter_src_path }}  state=directory
+
+    - name: clone the haproxy_exporter project src
+      git:
+        repo: "{{ prometheus_haproxy_exporter_git_url }}"
+        dest: "{{ prometheus_haproxy_exporter_src_path }}"
+        force: yes
+
+    - name: build haproxy_exporter source code
+      command: make
+      args:
+        chdir: "{{ prometheus_haproxy_exporter_src_path }}"
+        creates: haproxy_exporter
+      environment:
+        GO15VENDOREXPERIMENT: 1
+        GOROOT: "{{ prometheus_goroot }}"
+        GOPATH: "{{ prometheus_gopath }}"
+        PATH: "{{ ansible_env.PATH }}:{{ prometheus_goroot }}/bin:{{ prometheus_gopath }}/bin"
+
+    - name: copy the built haproxy_exporter to the install path
+      command: "cp {{ prometheus_haproxy_exporter_src_path }}/haproxy_exporter {{ prometheus_install_path }}"
+      args:
+        creates: "{{ prometheus_install_path }}/haproxy_exporter"
+
+  when: prometheus_haproxy_exporter_version == "git"
+
+- name: mkdir for data
+  file:
+    path: "{{ prometheus_db_path }}"
+    state: directory
+    owner: "{{ prometheus_user }}"
+    group: "{{ prometheus_group }}"
+    mode: "u=rwx,g=rx,o="
+
+- name: set haproxy_exporter variables
+  copy: src="../files/etc-default-haproxy_exporter"  dest=/etc/default/haproxy_exporter
+  register: haproxy_exporter_config
+
+- debug: var=haproxy_exporter_config
+  notify: reload haproxy_exporter
+  when: haproxy_exporter_config.changed
+
+
+- name: copy INIT script to server
+  template: src="../templates/haproxy_exporter.sysvinit.{{ ansible_os_family|lower }}.sh.j2"  dest="/etc/init.d/haproxy_exporter"  mode="a+x"
+  when: not prometheus_haproxy_exporter_use_systemd|bool
+
+- name: copy systemd config to server
+  template: src="../templates/haproxy_exporter.service.j2"  dest="/lib/systemd/system/haproxy_exporter.service"
+  when: prometheus_haproxy_exporter_use_systemd|bool
+
+
+- name: set INIT status and start
+  service: name=haproxy_exporter enabled=yes state=started
+  when: haproxy_exporter_bin.stat.exists == False

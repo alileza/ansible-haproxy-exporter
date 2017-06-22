@@ -2,11 +2,11 @@
 # file: handlers/main.yml
 #
 
-- name: restart node_exporter
-  service: name=node_exporter state=restarted
+- name: restart haproxy_exporter
+  service: name=haproxy_exporter state=restarted
 
-- name: reload node_exporter
-  service: name=node_exporter state=reloaded
+- name: reload haproxy_exporter
+  service: name=haproxy_exporter state=reloaded
 
-- name: stop node_exporter
-  service: name=node_exporter state=stopped
+- name: stop haproxy_exporter
+  service: name=haproxy_exporter state=stopped
